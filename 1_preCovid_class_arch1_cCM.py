@@ -19,6 +19,10 @@ import lightgbm as lgb
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense, Dropout
 from tensorflow.keras.optimizers import Adam
+import warnings
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+warnings.filterwarnings("ignore")
 
 # 1. Engenharia de Features Temporais
 def create_time_features(df, target_col, lags=7, window=14):
@@ -54,28 +58,13 @@ MODELS = {
     "LightGBM": lgb.LGBMClassifier(n_estimators=100),
 }
 
-def create_mlp(input_shape):
-    model = Sequential([
-        Dense(64, activation='relu', input_shape=(input_shape,)),
-        Dropout(0.2),
-        Dense(32, activation='relu'),
-        Dropout(0.2),
-        Dense(1, activation='sigmoid')
-    ])
-    model.compile(optimizer=Adam(learning_rate=0.001), loss='binary_crossentropy', metrics=['accuracy'])
-    return model
-
 # 4. Treinamento e Avaliação
 def train_and_evaluate_classification(X_train, y_train, X_test, y_test, model_name):
     print(f"Executando modelo: {model_name}")
-    if model_name == "MLP":
-        model = create_mlp(X_train.shape[1])
-        model.fit(X_train, y_train, epochs=50, batch_size=32, verbose=0, validation_split=0.1)
-        y_pred = (model.predict(X_test) > 0.5).astype(int).flatten()
-    else:
-        model = MODELS[model_name]
-        model.fit(X_train, y_train)
-        y_pred = model.predict(X_test)
+
+    model = MODELS[model_name]
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_test)
     
     df_resultados = pd.DataFrame({
         'Preco_anterior': test['lag_1'].values,
@@ -94,10 +83,11 @@ def train_and_evaluate_classification(X_train, y_train, X_test, y_test, model_na
     return metrics, df_resultados
 
 # 5. Execução
-file_path = 'Italia3_nao_corrigido_tratado_preCovid.xlsx'
+file_path = 'Italia3_corrigido_tratado_preCovid.xlsx'
 df = load_data(file_path)
 if df is not None:
     exog_features = [col for col in df.columns if col not in ['Preco', 'target']]
+    f1_score_data = {model: [] for model in MODELS.keys()} 
     accuracy_data = {model: [] for model in MODELS.keys()}
     months_range = list(range(0, 36))
     resultados = []
@@ -114,6 +104,7 @@ if df is not None:
             metrics, df_resultados = train_and_evaluate_classification(X_train, y_train, X_test, y_test, model_name)
             resultados.append({'months': months, 'model': model_name, 'metrics': metrics, 'df_resultados': df_resultados})
             accuracy_data[model_name].append(metrics['Accuracy'])
+            f1_score_data[model_name].append(metrics['F1-Score'])  # Armazena F1-score
     
     # Gerar gráfico de Acurácia vs Número de Meses para cada modelo
     plt.figure(figsize=(10, 6))
@@ -125,3 +116,42 @@ if df is not None:
     plt.legend()
     plt.grid()
     plt.show()
+
+    # --- Gerar gráfico de F1-Score vs Número de Meses de Teste ---    
+    plt.figure(figsize=(10, 6))
+    for model, f1_scores in f1_score_data.items():
+        plt.plot(months_range, f1_scores, label=model)
+    
+    plt.xlabel('Número de Meses de Teste')
+    plt.ylabel('F1-Score')
+    plt.title('F1-Score vs Número de Meses para cada Modelo')
+    plt.legend()
+    plt.grid()
+    plt.show()
+    
+    # Salvar os resultados em um arquivo Excel com duas planilhas:
+    with pd.ExcelWriter('resultados.xlsx') as writer:
+        # 1. Criar DataFrame com as métricas de cada execução
+        df_metrics = pd.DataFrame([
+            {
+                'months': r['months'],
+                'model': r['model'],
+                'Accuracy': r['metrics']['Accuracy'],
+                'Precision': r['metrics']['Precision'],
+                'Recall': r['metrics']['Recall'],
+                'F1-Score': r['metrics']['F1-Score']
+            }
+            for r in resultados
+        ])
+        df_metrics.to_excel(writer, sheet_name='Métricas', index=False)
+    
+        # 2. Concatenar os dataframes df_resultados de cada execução, adicionando as colunas identificadoras
+        list_df_resultados = []
+        for r in resultados:
+            temp_df = r['df_resultados'].copy()
+            temp_df['months'] = r['months']
+            temp_df['model'] = r['model']
+            list_df_resultados.append(temp_df)
+        if list_df_resultados:
+            df_detalhado = pd.concat(list_df_resultados)
+            df_detalhado.to_excel(writer, sheet_name='Detalhes', index=True)
