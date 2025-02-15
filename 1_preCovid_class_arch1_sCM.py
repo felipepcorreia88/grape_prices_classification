@@ -5,9 +5,11 @@ Created on Thu Feb 13 11:06:00 2025
 @author: felip
 """
 
+import numpy as np
 import pandas as pd
 import random
 import matplotlib.pyplot as plt
+import seaborn as sns
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
@@ -61,11 +63,11 @@ MODELS = {
 # 4. Treinamento e Avaliação
 def train_and_evaluate_classification(X_train, y_train, X_test, y_test, model_name):
     print(f"Executando modelo: {model_name}")
-
     model = MODELS[model_name]
     model.fit(X_train, y_train)
     y_pred = model.predict(X_test)
     
+    # Cria DataFrame com os resultados (usando a variável 'test' globalmente definida)
     df_resultados = pd.DataFrame({
         'Preco_anterior': test['lag_1'].values,
         'Preco_atual': test['Preco'].values,
@@ -82,70 +84,105 @@ def train_and_evaluate_classification(X_train, y_train, X_test, y_test, model_na
     print(f"Resultados para {model_name}: {metrics}")
     return metrics, df_resultados
 
-# 5. Execução
+# 5. Execução Principal
 file_path = 'Italia3_nao_corrigido_tratado_preCovid.xlsx'
 df = load_data(file_path)
 if df is not None:
+    # Define features explicativas (excluindo 'Preco' e 'target')
     exog_features = [col for col in df.columns if col not in ['Preco', 'target']]
-    f1_score_data = {model: [] for model in MODELS.keys()} 
+    
+    # Dicionários para armazenar métricas ao longo das iterações
     accuracy_data = {model: [] for model in MODELS.keys()}
+    f1_score_data = {model: [] for model in MODELS.keys()}
     months_range = list(range(0, 36))
     resultados = []
+    
+    # Loop para diferentes períodos de teste
     for months in range(0, 36):
         test_start_date = df.index.max() - pd.DateOffset(months=months)
         train = df[df.index < test_start_date]
-        test = df[df.index >= test_start_date]
+        test = df[df.index >= test_start_date]  # variável 'test' usada na função de avaliação
+        
         scaler_X = MinMaxScaler().fit(train[exog_features])
         X_train = scaler_X.transform(train[exog_features])
         y_train = train['target'].values
         X_test = scaler_X.transform(test[exog_features])
         y_test = test['target'].values
+        
         for model_name in MODELS.keys():
             metrics, df_resultados = train_and_evaluate_classification(X_train, y_train, X_test, y_test, model_name)
-            resultados.append({'months': months, 'model': model_name, 'metrics': metrics, 'df_resultados': df_resultados})
+            resultados.append({
+                'months': months,
+                'model': model_name,
+                'metrics': metrics,
+                'df_resultados': df_resultados
+            })
             accuracy_data[model_name].append(metrics['Accuracy'])
-            f1_score_data[model_name].append(metrics['F1-Score'])  # Armazena F1-score
+            f1_score_data[model_name].append(metrics['F1-Score'])
     
-    # Gerar gráfico de Acurácia vs Número de Meses para cada modelo
+    # Plot 1: Accuracy vs Number of Test Months
     plt.figure(figsize=(10, 6))
     for model, accuracies in accuracy_data.items():
         plt.plot(months_range, accuracies, label=model)
-    plt.xlabel('Número de Meses de Teste')
-    plt.ylabel('Acurácia')
-    plt.title('Acurácia vs Número de Meses para cada Modelo')
+    plt.xlabel('Number of Test Months')
+    plt.ylabel('Accuracy')
+    plt.title('Accuracy vs Number of Test Months for Each Model')
     plt.legend()
     plt.grid()
+    plt.savefig('preCovid_class_arch1_sCM_accuracy_months.png', dpi=300, bbox_inches='tight')
     plt.show()
-
-    # --- Gerar gráfico de F1-Score vs Número de Meses de Teste ---    
+    
+    # Plot 2: F1-Score vs Number of Test Months
     plt.figure(figsize=(10, 6))
     for model, f1_scores in f1_score_data.items():
         plt.plot(months_range, f1_scores, label=model)
-    
-    plt.xlabel('Número de Meses de Teste')
+    plt.xlabel('Number of Test Months')
     plt.ylabel('F1-Score')
-    plt.title('F1-Score vs Número de Meses para cada Modelo')
+    plt.title('F1-Score vs Number of Test Months for Each Model')
     plt.legend()
     plt.grid()
+    plt.savefig('preCovid_class_arch1_sCM_f1score_months.png', dpi=300, bbox_inches='tight')
+    plt.show()
+    
+    # Plot 3: Feature Importance in Relation to Target
+    # Calculates absolute correlation between each feature and the target variable
+    feature_importance = pd.Series(
+        data=np.abs(df[exog_features].corrwith(df['target'])),
+        index=exog_features
+    ).sort_values(ascending=False)
+    plt.figure(figsize=(10, 6))
+    sns.barplot(x=feature_importance.values, y=feature_importance.index, palette="mako")
+    plt.title('Feature Importance (Absolute Correlation with Target)')
+    plt.xlabel('Absolute Correlation')
+    plt.ylabel('Features')
+    plt.grid(True, linestyle='--', alpha=0.5)
+    plt.tight_layout()
+    plt.savefig('preCovid_class_arch1_sCM_feature_importance.png', dpi=300, bbox_inches='tight')
+    plt.show()
+    
+    # Plot 4: Heatmap of Feature Correlation with Target
+    plt.figure(figsize=(12, 8))
+    correlation_matrix = df[exog_features + ['target']].corr()
+    sns.heatmap(correlation_matrix, annot=True, fmt='.2f', cmap='coolwarm', cbar=True)
+    plt.title('Heatmap of Feature Correlation with Target')
+    plt.tight_layout()
+    plt.savefig('preCovid_class_arch1_sCM_heatmap.png', dpi=300, bbox_inches='tight')
     plt.show()
     
     # Salvar os resultados em um arquivo Excel com duas planilhas:
-    with pd.ExcelWriter('resultados.xlsx') as writer:
-        # 1. Criar DataFrame com as métricas de cada execução
-        df_metrics = pd.DataFrame([
-            {
-                'months': r['months'],
-                'model': r['model'],
-                'Accuracy': r['metrics']['Accuracy'],
-                'Precision': r['metrics']['Precision'],
-                'Recall': r['metrics']['Recall'],
-                'F1-Score': r['metrics']['F1-Score']
-            }
-            for r in resultados
-        ])
+    with pd.ExcelWriter('preCovid_class_arch1_sCM_results.xlsx') as writer:
+        # Planilha 1: Métricas de cada execução
+        df_metrics = pd.DataFrame([{
+            'months': r['months'],
+            'model': r['model'],
+            'Accuracy': r['metrics']['Accuracy'],
+            'Precision': r['metrics']['Precision'],
+            'Recall': r['metrics']['Recall'],
+            'F1-Score': r['metrics']['F1-Score']
+        } for r in resultados])
         df_metrics.to_excel(writer, sheet_name='Métricas', index=False)
     
-        # 2. Concatenar os dataframes df_resultados de cada execução, adicionando as colunas identificadoras
+        # Planilha 2: Detalhes dos resultados
         list_df_resultados = []
         for r in resultados:
             temp_df = r['df_resultados'].copy()
